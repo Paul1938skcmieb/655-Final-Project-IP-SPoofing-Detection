@@ -1,0 +1,21 @@
+import socket
+
+# Server IP and port
+server_ip = '192.168.1.14'  # Replace with the actual server IP
+server_port = 12345  # Replace with the actual server port
+
+# Create a TCP socket
+client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+# Connect to the server
+client_socket.connect((server_ip, server_port))
+
+# Message to send
+message = "We are attacking you"
+
+for _ in range(10000):
+    # Send the message to the server
+    client_socket.send(message.encode())
+
+# Close the socket
+client_socket.close()

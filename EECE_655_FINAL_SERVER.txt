@@ -1,0 +1,354 @@
+import socket
+import threading
+import time
+import subprocess
+from scapy.all import sniff, IP, TCP
+
+
+# Global variables for tracking attack detection
+message_threshold = 100  # Adjust this threshold as needed
+time_window = 60  # Time window in seconds to monitor
+connections = {}
+server_ip = '192.168.1.14'
+stop_sniffing = False  # Global variable to control packet sniffing
+blacklisted_ips = set()  # Maintain a set to store blacklisted IPs
+
+def start_p0f(interface):
+    # Run p0f on the specified interface and append output to a file
+    cmd = f"gnome-terminal -- bash -c 'sudo p0f  -i {interface}; exec bash'"
+    subprocess.run(cmd, shell=True)
+    with open('p0f_output.txt', 'a') as file:
+        subprocess.run(['p0f', '-i', interface], stdout=file, text=True)
+
+
+def handle_dos_attack(attacker_ip):
+    global stop_sniffing
+    stop_sniffing = True		
+    time.sleep(5)
+    subprocess.run(["nmap", "-O", "-osscan-guess", str(attacker_ip)])
+    nmap_output = subprocess.run(
+        ['nmap', str(attacker_ip), '-O', '-osscan-guess'], capture_output=True, text=True)
+    with open('nmap_output.txt', 'a') as file:
+        file.write(nmap_output.stdout)
+
+    find_attacker_os(str(attacker_ip))
+    print_aggressive_os_guesses(str(attacker_ip))
+    compare_os_info(str(attacker_ip))
+
+
+def packet_sniffer():
+    global stop_sniffing
+    # Create a dictionary to track crafted packet counts by IP address
+    crafted_packets = {}
+    sniffing = True
+    
+    while not stop_sniffing:
+        def packet_handler(packet):
+            if IP in packet and TCP in packet:
+                src_ip = packet[IP].src
+                dst_ip = packet[IP].dst
+                src_port = packet[TCP].sport
+                dst_port = packet[TCP].dport
+                payload = str(packet[TCP].payload)
+                
+                if src_ip in blacklisted_ips:  # Check if the packet source is blacklisted
+                    print(f"Ignoring packet from blacklisted IP: {src_ip}")
+                    return  # Skip processing packets from blacklisted IPs
+
+                print(f"Received packet from {src_ip}:{src_port} to {dst_ip}:{dst_port}")
+                print(f"Payload: {payload}")
+
+                # Check for crafted packets and track counts
+                if src_ip not in crafted_packets:
+                    crafted_packets[src_ip] = 1
+                else:
+                    crafted_packets[src_ip] += 1
+
+                # Detect potential DoS attacks from crafted packets
+                if crafted_packets[src_ip] > message_threshold:
+                    print(f"Potential DoS attack detected from {src_ip} using crafted packets!")
+                    if not is_blacklisted(src_ip):  # Check if the IP is already blacklisted
+                    	handle_dos_attack(src_ip)  # Perform actions for DoS attack detection
+                    sniffing = False  # Set sniffing to False to stop packet sniffing
+                    # Reset the crafted packet count after handling the attack
+                    crafted_packets[src_ip] = 0
+
+        # Start sniffing packets
+        sniff(filter="tcp and host 192.168.1.14 and port 12345", prn=packet_handler)
+        while sniffing:
+            time.sleep(1)  # Add a small delay to avoid high CPU usage while waiting for sniffing to stop
+
+
+
+#Function to print the os information from p0f 
+def find_attacker_os(attacker_ip):
+    with open('p0f_output.txt', 'r') as file:
+        lines = file.readlines()
+        found = False
+        for i, line in enumerate(lines):
+            if attacker_ip in line and server_ip in line and "os       =" in lines[i + 3]:
+                found = True
+                os_info = lines[i + 2:i + 8]  # Assuming OS details are 3 lines below attacker_ip
+                os_type = lines[i + 3].split("os       =")[1].strip().split()[0]
+                os = ' '.join(os_info)
+                print(f"Results from p0f: OS Information for {attacker_ip}:")
+                print(os)
+             
+                break
+        if not found:
+            print(f"No OS information found for {attacker_ip}")
+            
+            
+
+#Function to return the os from p0f
+def find_attacker_os_type(attacker_ip):
+    with open('p0f_output.txt', 'r') as file:
+        lines = file.readlines()
+        found = False
+        for i, line in enumerate(lines):
+            if attacker_ip in line and server_ip in line and "os       =" in lines[i + 3]:
+                found = True
+                os_type = lines[i + 3].split("os       =")[1].strip().split()[0]
+       
+                break
+        if not found:
+            print(f"No OS information found for {attacker_ip}")
+    
+    return os_type
+    
+def find_attacker_os_type_2(attacker_ip):
+    with open('p0f_output.txt', 'r') as file:
+        lines = file.readlines()
+        for i, line in enumerate(lines):
+            if attacker_ip in line and server_ip in line and "os       = ???" in lines[i + 3]:
+                return 1
+                
+                
+    
+def find_attacker_os_type_2(attacker_ip):
+    with open('p0f_output.txt', 'r') as file:
+        lines = file.readlines()
+        for i, line in enumerate(lines):
+            if attacker_ip in line and server_ip in line and "os       = ???" in lines[i + 3]:
+                return 1
+    
+
+
+                  
+
+#Function to print the os information from nmap
+def print_aggressive_os_guesses(attacker_ip):
+    try:
+        with open('nmap_output.txt', 'r') as file:
+            lines = file.readlines()
+            next_lines = False
+            for line in lines:
+                if f"Nmap scan report for {attacker_ip}" in line:
+                    next_lines = True
+                    continue
+                if next_lines:
+                    if line.startswith("Aggressive OS guesses:"):
+	
+                        print(f"Results from nmap: OS Information for {attacker_ip}:", line)
+                        break
+                    # Check the next 20 lines
+                    elif lines.index(line) - lines.index(lines[-1]) >= 20:
+                        print("No Aggressive OS guesses found within the next 20 lines")
+                        break
+    except FileNotFoundError:
+        print("nmap_output.txt not found")
+        
+
+#Function to print the os information from nmap
+def return_aggressive_os_guesses(attacker_ip):
+    try:
+        with open('nmap_output.txt', 'r') as file:
+            lines = file.readlines()
+            next_lines = False
+            os_guesses = ""  # Initialize an empty string to store the OS guesses
+            for line in lines:
+                if f"Nmap scan report for {attacker_ip}" in line:
+                    next_lines = True
+                    continue
+                if next_lines:
+                    if line.startswith("Aggressive OS guesses:"):
+                        os_guesses = line.split("Aggressive OS guesses:")[1].strip()
+                        break
+                    # Check the next 20 lines
+                    elif lines.index(line) - lines.index(lines[-1]) >= 20:
+                        break
+        return os_guesses
+    except FileNotFoundError:
+        print("nmap_output.txt not found")
+       
+
+def nmap_condition(attacker_ip):
+    # Check for specific condition in nmap_output.txt
+    try:
+        with open('nmap_output.txt', 'r') as file:
+            lines = file.readlines()
+            for i, line in enumerate(lines):
+                if f"Nmap scan report for {attacker_ip}" in line:
+                    # Check if the condition appears 4 lines after the IP scan report
+                    if "Too many fingerprints match this host to give specific OS details" in lines[i + 4]:
+                        return 1
+    except FileNotFoundError:
+        pass  # Handle the case when the file is not found or other exceptions
+    return 0  # Return 0 if the condition is not met
+    
+def nmap_condition_2(attacker_ip):
+    # Check for specific condition in nmap_output.txt
+    try:
+        with open('nmap_output.txt', 'r') as file:
+            lines = file.readlines()
+            for i, line in enumerate(lines):
+                if f"Note: Host seems down." in line:
+                	return 1
+                    
+    except FileNotFoundError:
+        pass  # Handle the case when the file is not found or other exceptions
+    return 0  # Return 0 if the condition is not met
+    
+
+     
+def compare_os_info(attacker_ip):
+    os_type_p0f = find_attacker_os_type(attacker_ip)
+    os_type_p0f_2 = find_attacker_os_type_2(attacker_ip)
+    aggressive_os_guesses = return_aggressive_os_guesses(attacker_ip)
+    
+    if os_type_p0f:
+        if nmap_condition_2(attacker_ip):
+            print("OS does not match. Potential spoofed IP!")
+        else:
+            if os_type_p0f == "???":  # If OS detection is inconclusive
+                print(f"OS does not match. Potential spoofed IP! Attacker impersonating the IP of user {attacker_ip}")
+            elif os_type_p0f in aggressive_os_guesses or nmap_condition:
+                print(f"OS match found: {os_type_p0f}") 
+                print("Legitimate IP address")
+            else:
+                print("OS does not match. Potential spoofed IP!")
+    else:
+        print("No OS information found from p0f")
+        
+        
+def compare_os_info(attacker_ip):
+    os_type_p0f = find_attacker_os_type(attacker_ip)
+    os_type_p0f_2 = find_attacker_os_type_2(attacker_ip)
+    aggressive_os_guesses = return_aggressive_os_guesses(attacker_ip)
+
+    if os_type_p0f:
+        if nmap_condition_2(attacker_ip):
+            print("OS does not match. Potential spoofed IP! Blacklisting...")
+            blacklisted_ips.add(attacker_ip)  # Add the suspected spoofed IP to the blacklist
+        else:
+            if os_type_p0f == "???":  # If OS detection is inconclusive
+                print(f"OS does not match. Potential spoofed IP! Attacker impersonating the IP of user {attacker_ip}. Blacklisting...")
+                blacklisted_ips.add(attacker_ip)  # Add the suspected spoofed IP to the blacklist
+            elif os_type_p0f in aggressive_os_guesses or nmap_condition:
+                print(f"OS match found: {os_type_p0f}") 
+                print("Legitimate IP address")
+            else:
+                print("OS does not match. Potential spoofed IP! Blacklisting...")
+                blacklisted_ips.add(attacker_ip)  # Add the suspected spoofed IP to the blacklist
+    else:
+        print("No OS information found from p0f")        
+        
+    
+
+# Function to check if the attacker's IP is blacklisted
+def is_blacklisted(attacker_ip):
+    return attacker_ip in blacklisted_ips
+
+
+def handle_client(client_socket, client_address):
+    global connections
+    message_count = 0
+    try:
+        while True:
+            data = client_socket.recv(1024)
+            if not data:
+                break
+            message_count += 1
+            print(f"Received data: {data.decode('utf-8')}")
+
+            if message_count > message_threshold:
+            	
+                
+                time.sleep(5)
+                print(f"Potential DOS attack detected from {client_address}!")
+                # Run nmap command against attacker's IP and save output to a separate file
+                time.sleep(5)
+                subprocess.run(["nmap","-O", "-osscan-guess" , str(client_address[0])])
+                nmap_output = subprocess.run(
+                    ['nmap', str(client_address[0]), '-O', '-osscan-guess'], capture_output=True, text=True)
+                with open('nmap_output.txt', 'a') as file:
+                    file.write(nmap_output.stdout)
+
+                find_attacker_os(str(client_address[0]))  # Fetch and print attacker's OS information
+                print_aggressive_os_guesses(str(client_address[0]))  # Fetch and print aggressive OS guesses
+                
+                compare_os_info(str(client_address[0]))  # Compare OS information
+
+                break
+    except ConnectionResetError:
+        print(f"Connection reset by {client_address}")
+
+    client_socket.close()
+    
+
+
+def detect_attack():
+    global connections
+    while True:
+        current_time = time.time()
+        for client_addr, (timestamp, message_count) in list(connections.items()):
+            if current_time - timestamp > time_window:
+                del connections[client_addr]
+            elif message_count > message_threshold:
+                print(f"Potential attack detected from {client_addr}!")
+                connections.pop(client_addr)
+                # Handle attack detection here (if needed)
+
+        time.sleep(5)
+
+
+
+def main():
+    HOST = '0.0.0.0'  # Listen on all available interfaces
+    PORT = 12345  # Replace with the port you want to listen on
+    p0f_interface = 'enp0s3'  # Replace with your desired interface
+
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.bind((HOST, PORT))
+    server_socket.listen(5)
+    print(f"Server is listening on {HOST}:{PORT}")
+
+    # Start p0f in a separate thread
+    p0f_thread = threading.Thread(target=start_p0f, args=(p0f_interface,))
+    p0f_thread.daemon = True
+    p0f_thread.start()
+	
+    sniffer_thread = threading.Thread(target=packet_sniffer)
+    sniffer_thread.daemon = True
+    sniffer_thread.start()
+    
+    while True:
+        client_socket, addr = server_socket.accept()
+        print(f"Connection from {addr} has been established!")
+
+        # Track incoming connections and message count
+        if addr not in connections:
+            connections[addr] = (time.time(), 0)
+        timestamp, message_count = connections[addr]
+        connections[addr] = (timestamp, message_count + 1)
+
+        client_handler = threading.Thread(target=handle_client, args=(client_socket, addr))
+        client_handler.start()
+
+
+if __name__ == "__main__":
+    detect_thread = threading.Thread(target=detect_attack)
+    detect_thread.daemon = True
+    detect_thread.start()
+
+    main()
